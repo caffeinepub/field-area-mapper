@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "GeneralSans";
+  src: url("/assets/fonts/GeneralSans.woff2") format("woff2");
+  font-weight: 200 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "GeistMono";
+  src: url("/assets/fonts/GeistMono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.375rem;
+
+    /* TerraMeasure Dark Palette */
+    --background: 0.215 0.014 242;
+    --foreground: 0.93 0.008 240;
+    --card: 0.275 0.014 242;
+    --card-foreground: 0.93 0.008 240;
+    --popover: 0.275 0.014 242;
+    --popover-foreground: 0.93 0.008 240;
+
+    /* Green accent */
+    --primary: 0.72 0.18 155;
+    --primary-foreground: 0.14 0.015 240;
+
+    --secondary: 0.32 0.014 242;
+    --secondary-foreground: 0.93 0.008 240;
+
+    --muted: 0.32 0.014 242;
+    --muted-foreground: 0.73 0.012 240;
+
+    --accent: 0.72 0.18 155;
+    --accent-foreground: 0.14 0.015 240;
+
+    --destructive: 0.577 0.245 27.325;
+    --destructive-foreground: 0.985 0 0;
+
+    --border: 0.34 0.014 242;
+    --input: 0.3 0.014 242;
+    --ring: 0.72 0.18 155;
+
+    --chart-1: 0.72 0.18 155;
+    --chart-2: 0.6 0.118 184;
+    --chart-3: 0.398 0.07 227;
+    --chart-4: 0.828 0.189 84;
+    --chart-5: 0.769 0.188 70;
+
+    --sidebar: 0.275 0.014 242;
+    --sidebar-foreground: 0.93 0.008 240;
+    --sidebar-primary: 0.72 0.18 155;
+    --sidebar-primary-foreground: 0.14 0.015 240;
+    --sidebar-accent: 0.32 0.014 242;
+    --sidebar-accent-foreground: 0.93 0.008 240;
+    --sidebar-border: 0.34 0.014 242;
+    --sidebar-ring: 0.72 0.18 155;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "GeneralSans", system-ui, sans-serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: oklch(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(var(--muted-foreground) / 0.5);
+  }
+}
