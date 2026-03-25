@@ -17,6 +17,18 @@ import {
 import type { ProjectWithId } from "./hooks/useQueries";
 import { calculateArea, calculatePerimeter } from "./utils/geomath";
 
+export interface OverlayItem {
+  id: string;
+  type: "image" | "pdf";
+  dataUrl: string;
+  label: string;
+  bounds: [[number, number], [number, number]];
+  opacity: number;
+  rotation: number;
+  blendMode: string;
+  scale: number;
+}
+
 export default function App() {
   const { identity, login, clear, isInitializing, isLoggingIn } =
     useInternetIdentity();
@@ -30,12 +42,22 @@ export default function App() {
 
   const [points, setPoints] = useState<[number, number][]>([]);
   const [drawMode, setDrawMode] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const [tileMode, setTileMode] = useState<TileMode>("osm");
   const [projectName, setProjectName] = useState("Unnamed Field");
   const [activeProjectId, setActiveProjectId] = useState<bigint | null>(null);
   const [fitBoundsKey, setFitBoundsKey] = useState(0);
   const [karamScale, setKaramScale] = useState(5.5);
   const [drawTool, setDrawTool] = useState<DrawTool>("polygon");
+  const [searchTarget, setSearchTarget] = useState<{
+    lat: number;
+    lng: number;
+    key: number;
+  } | null>(null);
+  const [overlays, setOverlays] = useState<OverlayItem[]>([]);
+  const [mapBounds, setMapBounds] = useState<
+    [[number, number], [number, number]] | null
+  >(null);
 
   const area = calculateArea(points);
   const perimeter = calculatePerimeter(points);
@@ -44,8 +66,10 @@ export default function App() {
     (lat: number, lng: number) => {
       setPoints((prev) => {
         const next = [...prev, [lat, lng] as [number, number]];
-        // Auto-stop after 2 points for line tool
         if (drawTool === "line" && next.length >= 2) {
+          setDrawMode(false);
+        }
+        if (drawTool === "angle" && next.length >= 3) {
           setDrawMode(false);
         }
         return next;
@@ -59,6 +83,14 @@ export default function App() {
     setDrawMode(false);
   }, []);
 
+  function handleToggleEditMode() {
+    setEditMode((prev) => {
+      const next = !prev;
+      if (next) setDrawMode(false);
+      return next;
+    });
+  }
+
   function handleUndo() {
     setPoints((prev) => prev.slice(0, -1));
   }
@@ -71,6 +103,7 @@ export default function App() {
   function handleClear() {
     setPoints([]);
     setActiveProjectId(null);
+    setEditMode(false);
     toast.info("Drawing cleared");
   }
 
@@ -78,6 +111,7 @@ export default function App() {
     setPoints([]);
     setActiveProjectId(null);
     setProjectName("Unnamed Field");
+    setEditMode(false);
   }
 
   function handleRemovePoint(idx: number) {
@@ -108,6 +142,7 @@ export default function App() {
     setActiveProjectId(project.id);
     setFitBoundsKey((k) => k + 1);
     setDrawMode(false);
+    setEditMode(false);
   }
 
   async function handleDeleteProject(id: bigint) {
@@ -117,6 +152,7 @@ export default function App() {
         setActiveProjectId(null);
         setPoints([]);
         setProjectName("Unnamed Field");
+        setEditMode(false);
       }
       toast.success("Project deleted");
     } catch {
@@ -131,9 +167,8 @@ export default function App() {
       const lat = Number.parseFloat(match[1]);
       const lng = Number.parseFloat(match[2]);
       if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        setPoints((prev) => [...prev, [lat, lng]]);
-        setFitBoundsKey((k) => k + 1);
-        toast.success(`Added point at ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+        setSearchTarget({ lat, lng, key: Date.now() });
+        toast.success(`Navigating to ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
         return;
       }
     }
@@ -145,16 +180,69 @@ export default function App() {
         if (data && data.length > 0) {
           const lat = Number.parseFloat(data[0].lat);
           const lng = Number.parseFloat(data[0].lon);
-          setPoints((prev) => [...prev, [lat, lng]]);
-          setFitBoundsKey((k) => k + 1);
+          setSearchTarget({ lat, lng, key: Date.now() });
           toast.success(
-            `Found: ${String(data[0].display_name).slice(0, 40)}\u2026`,
+            `Navigating to: ${String(data[0].display_name).slice(0, 40)}\u2026`,
           );
         } else {
           toast.error("Location not found");
         }
       })
       .catch(() => toast.error("Search failed"));
+  }
+
+  function handleLatLngJump(lat: number, lng: number) {
+    setSearchTarget({ lat, lng, key: Date.now() });
+    toast.success(`Navigating to ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+  }
+
+  function handleAddOverlay(item: OverlayItem) {
+    setOverlays((prev) => [...prev, item]);
+  }
+
+  function handleUpdateOverlay(
+    id: string,
+    updates: Partial<
+      Pick<
+        OverlayItem,
+        "bounds" | "opacity" | "rotation" | "blendMode" | "scale"
+      >
+    >,
+  ) {
+    setOverlays((prev) =>
+      prev.map((o) => {
+        if (o.id !== id) return o;
+        let merged = { ...o, ...updates };
+        if (updates.scale !== undefined && updates.bounds === undefined) {
+          const [[s, w], [n, e]] = o.bounds;
+          const centerLat = (n + s) / 2;
+          const centerLng = (e + w) / 2;
+          const ratio = updates.scale / (o.scale || 100);
+          const halfH = ((n - s) / 2) * ratio;
+          const halfW = ((e - w) / 2) * ratio;
+          merged.bounds = [
+            [centerLat - halfH, centerLng - halfW],
+            [centerLat + halfH, centerLng + halfW],
+          ];
+        }
+        return merged;
+      }),
+    );
+  }
+
+  function handleRemoveOverlay(id: string) {
+    setOverlays((prev) => prev.filter((o) => o.id !== id));
+  }
+
+  // Get current map center for overlay initial bounds
+  function getInitialBoundsForOverlay(): [[number, number], [number, number]] {
+    const center: [number, number] =
+      points.length > 0 ? [points[0][0], points[0][1]] : [34.0, 74.8]; // Default to J&K region
+    const half = 0.003;
+    return [
+      [center[0] - half, center[1] - half],
+      [center[0] + half, center[1] + half],
+    ];
   }
 
   if (isInitializing) {
@@ -312,14 +400,17 @@ export default function App() {
         <LeftSidebar
           points={points}
           drawMode={drawMode}
+          editMode={editMode}
           tileMode={tileMode}
           projectName={projectName}
           isSaving={saveProject.isPending}
           karamScale={karamScale}
           drawTool={drawTool}
+          overlays={overlays}
           onKaramScaleChange={setKaramScale}
           onTileModeChange={setTileMode}
           onToggleDrawMode={() => setDrawMode((d) => !d)}
+          onToggleEditMode={handleToggleEditMode}
           onUndo={handleUndo}
           onClosePolygon={handleClosePolygon}
           onClear={handleClear}
@@ -328,22 +419,57 @@ export default function App() {
           onProjectNameChange={setProjectName}
           onSearchGPS={handleSearchGPS}
           onDrawToolChange={setDrawTool}
+          onLatLngJump={handleLatLngJump}
+          onAddOverlay={(item) => {
+            const withBounds: OverlayItem = {
+              ...item,
+              bounds: getInitialBoundsForOverlay(),
+              blendMode: item.blendMode || "normal",
+              scale: item.scale || 100,
+            };
+            handleAddOverlay(withBounds);
+          }}
+          mapBounds={mapBounds}
+          onUpdateOverlay={handleUpdateOverlay}
+          onRemoveOverlay={handleRemoveOverlay}
         />
 
         <div className="flex-1 relative overflow-hidden">
           <MapView
             points={points}
             drawMode={drawMode}
+            editMode={editMode}
             tileMode={tileMode}
             fitBoundsKey={fitBoundsKey}
             area={area}
             karamScale={karamScale}
             drawTool={drawTool}
+            searchTarget={searchTarget}
+            overlays={overlays}
             onAddPoint={handleAddPoint}
             onSetPoints={handleSetPoints}
+            onOverlayUpdate={(id, bounds, rotation, opacity) =>
+              handleUpdateOverlay(id, { bounds, rotation, opacity })
+            }
+            onBoundsChange={setMapBounds}
           />
 
-          {drawMode && (
+          {editMode && (
+            <div
+              className="absolute top-3 left-1/2 -translate-x-1/2 text-xs font-semibold px-3 py-1.5 rounded-full pointer-events-none"
+              style={{
+                background: "rgba(245,158,11,0.15)",
+                border: "1px solid rgba(245,158,11,0.5)",
+                color: "#f59e0b",
+                backdropFilter: "blur(4px)",
+                zIndex: 1000,
+              }}
+            >
+              Edit Mode — drag points to reposition
+            </div>
+          )}
+
+          {drawMode && !editMode && (
             <div
               className="absolute top-3 left-1/2 -translate-x-1/2 text-xs font-semibold px-3 py-1.5 rounded-full pointer-events-none"
               style={{

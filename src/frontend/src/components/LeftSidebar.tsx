@@ -5,9 +5,11 @@ import { Separator } from "@/components/ui/separator";
 import {
   CheckCheck,
   Circle,
+  Edit3,
   FileDown,
   FileText,
   Hexagon,
+  Image,
   Layers,
   Minus,
   Route,
@@ -16,11 +18,13 @@ import {
   Search,
   Square,
   Trash2,
+  Triangle,
   Undo2,
   X,
 } from "lucide-react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
+import type { OverlayItem } from "../App";
 import { downloadFile, generateCSV, generateDXF } from "../utils/dxf";
 import {
   calculateArea,
@@ -31,6 +35,9 @@ import {
   metersToMiles,
   sqMetersToAcres,
   sqMetersToHectares,
+  sqMetersToKanal,
+  sqMetersToMarla,
+  sqMetersToSarsi,
   sqMetersToSqFeet,
   sqMetersToSqKaram,
 } from "../utils/geomath";
@@ -39,14 +46,17 @@ import type { DrawTool, TileMode } from "./MapView";
 interface LeftSidebarProps {
   points: [number, number][];
   drawMode: boolean;
+  editMode: boolean;
   tileMode: TileMode;
   projectName: string;
   isSaving: boolean;
   karamScale: number;
   drawTool: DrawTool;
+  overlays: OverlayItem[];
   onKaramScaleChange: (value: number) => void;
   onTileModeChange: (mode: TileMode) => void;
   onToggleDrawMode: () => void;
+  onToggleEditMode: () => void;
   onUndo: () => void;
   onClosePolygon: () => void;
   onClear: () => void;
@@ -55,6 +65,19 @@ interface LeftSidebarProps {
   onProjectNameChange: (name: string) => void;
   onSearchGPS: (query: string) => void;
   onDrawToolChange: (tool: DrawTool) => void;
+  onLatLngJump: (lat: number, lng: number) => void;
+  onAddOverlay: (item: OverlayItem) => void;
+  onUpdateOverlay: (
+    id: string,
+    updates: Partial<
+      Pick<
+        OverlayItem,
+        "bounds" | "opacity" | "rotation" | "blendMode" | "scale"
+      >
+    >,
+  ) => void;
+  mapBounds: [[number, number], [number, number]] | null;
+  onRemoveOverlay: (id: string) => void;
 }
 
 const DRAW_TOOLS: {
@@ -93,19 +116,28 @@ const DRAW_TOOLS: {
     icon: <Circle size={13} />,
     desc: "Radius-based circle",
   },
+  {
+    tool: "angle" as DrawTool,
+    label: "Angle",
+    icon: <Triangle size={13} />,
+    desc: "Measure angle between 3 points",
+  },
 ];
 
 export function LeftSidebar({
   points,
   drawMode,
+  editMode,
   tileMode,
   projectName,
   isSaving,
   karamScale,
   drawTool,
+  overlays,
   onKaramScaleChange,
   onTileModeChange,
   onToggleDrawMode,
+  onToggleEditMode,
   onUndo,
   onClosePolygon,
   onClear,
@@ -114,6 +146,11 @@ export function LeftSidebar({
   onProjectNameChange,
   onSearchGPS,
   onDrawToolChange,
+  onLatLngJump,
+  onAddOverlay,
+  onUpdateOverlay,
+  onRemoveOverlay,
+  mapBounds,
 }: LeftSidebarProps) {
   const area = calculateArea(points);
   const perimeter = calculatePerimeter(points);
@@ -127,6 +164,17 @@ export function LeftSidebar({
     feetToInches(perimeterFeet - perimeterWholeFt),
   );
   const searchRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+
+  const [jumpLat, setJumpLat] = useState("");
+  const [jumpLng, setJumpLng] = useState("");
+  const [pdfPagePicker, setPdfPagePicker] = useState<{
+    totalPages: number;
+    currentPage: number;
+    pdfDoc: any;
+    fileName: string;
+  } | null>(null);
 
   const karamFt = karamScale > 0 ? karamScale : 5.5;
   const karamWholeFt = Math.floor(karamFt);
@@ -150,6 +198,120 @@ export function LeftSidebar({
     const csv = generateCSV(points);
     downloadFile(csv, "field-coordinates.csv", "text/csv");
     toast.success("CSV file downloaded");
+  }
+
+  function handleLatLngJump() {
+    const lat = Number.parseFloat(jumpLat);
+    const lng = Number.parseFloat(jumpLng);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      toast.error("Enter valid latitude and longitude");
+      return;
+    }
+    if (lat < -90 || lat > 90) {
+      toast.error("Latitude must be between -90 and 90");
+      return;
+    }
+    if (lng < -180 || lng > 180) {
+      toast.error("Longitude must be between -180 and 180");
+      return;
+    }
+    onLatLngJump(lat, lng);
+  }
+
+  function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      const label = `Image ${overlays.filter((o) => o.type === "image").length + 1}`;
+      const id = `overlay-${Date.now()}`;
+      onAddOverlay({
+        id,
+        type: "image",
+        dataUrl,
+        label,
+        bounds: [
+          [0, 0],
+          [0, 0],
+        ], // will be replaced in App.tsx
+        opacity: 0.8,
+        rotation: 0,
+        blendMode: "normal",
+        scale: 100,
+      });
+      toast.success(`${label} added to map`);
+    };
+    reader.readAsDataURL(file);
+    // Reset input so same file can be re-uploaded
+    e.target.value = "";
+  }
+
+  async function renderPdfPage(pdfDoc: any, pageNum: number, fileName: string) {
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const dataUrl = canvas.toDataURL("image/png");
+
+      const label = `PDF p${pageNum} (${fileName.slice(0, 12)})`;
+      const id = `overlay-${Date.now()}`;
+      onAddOverlay({
+        id,
+        type: "pdf",
+        dataUrl,
+        label,
+        bounds: [
+          [0, 0],
+          [0, 0],
+        ],
+        opacity: 0.8,
+        rotation: 0,
+        blendMode: "normal",
+        scale: 100,
+      });
+      setPdfPagePicker(null);
+      toast.success(`PDF page ${pageNum} added to map`);
+    } catch {
+      toast.error("Failed to render PDF page");
+    }
+  }
+
+  async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    const w = window as any;
+    if (!w.pdfjsLib) {
+      toast.error("PDF.js not loaded. Please refresh.");
+      return;
+    }
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfDoc = await w.pdfjsLib.getDocument({ data: arrayBuffer })
+        .promise;
+      const totalPages = pdfDoc.numPages;
+
+      if (totalPages === 1) {
+        await renderPdfPage(pdfDoc, 1, file.name);
+      } else {
+        setPdfPagePicker({
+          totalPages,
+          currentPage: 1,
+          pdfDoc,
+          fileName: file.name,
+        });
+      }
+    } catch {
+      toast.error("Failed to load PDF");
+    }
   }
 
   return (
@@ -190,25 +352,29 @@ export function LeftSidebar({
               style={{ background: "#1F242A", padding: 2 }}
               data-ocid="map.tab"
             >
-              {(["osm", "satellite", "hybrid"] as TileMode[]).map((m) => (
-                <button
-                  type="button"
-                  key={m}
-                  onClick={() => onTileModeChange(m)}
-                  className="flex-1 text-xs py-1 rounded transition-all"
-                  style={{
-                    background: tileMode === m ? "#22C57A" : "transparent",
-                    color: tileMode === m ? "#14181D" : "#AAB3BD",
-                    fontWeight: tileMode === m ? 700 : 400,
-                  }}
-                >
-                  {m === "osm"
-                    ? "OpenStreet"
-                    : m === "satellite"
-                      ? "Satellite"
-                      : "Hybrid"}
-                </button>
-              ))}
+              {(["osm", "satellite", "hybrid", "google"] as TileMode[]).map(
+                (m) => (
+                  <button
+                    type="button"
+                    key={m}
+                    onClick={() => onTileModeChange(m)}
+                    className="flex-1 text-xs py-1 rounded transition-all"
+                    style={{
+                      background: tileMode === m ? "#22C57A" : "transparent",
+                      color: tileMode === m ? "#14181D" : "#AAB3BD",
+                      fontWeight: tileMode === m ? 700 : 400,
+                    }}
+                  >
+                    {m === "osm"
+                      ? "OSM"
+                      : m === "satellite"
+                        ? "ESRI Sat"
+                        : m === "hybrid"
+                          ? "Hybrid"
+                          : "Google"}
+                  </button>
+                ),
+              )}
             </div>
           </section>
 
@@ -217,7 +383,7 @@ export function LeftSidebar({
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
               <Search size={12} /> Search Location
             </p>
-            <div className="flex gap-1.5">
+            <div className="flex gap-1.5 mb-2">
               <Input
                 ref={searchRef}
                 placeholder="Search address or GPS\u2026"
@@ -240,6 +406,405 @@ export function LeftSidebar({
                 <Search size={13} />
               </Button>
             </div>
+
+            {/* Lat/Long Jump */}
+            <div
+              className="rounded p-2 space-y-1.5"
+              style={{ background: "#1F242A", border: "1px solid #3A424C" }}
+            >
+              <p className="text-xs font-semibold" style={{ color: "#AAB3BD" }}>
+                Jump to Coordinates
+              </p>
+              <div className="flex gap-1.5">
+                <Input
+                  type="number"
+                  placeholder="Latitude"
+                  value={jumpLat}
+                  onChange={(e) => setJumpLat(e.target.value)}
+                  className="h-7 text-xs bg-background border-border flex-1"
+                  data-ocid="map.search_input"
+                />
+                <Input
+                  type="number"
+                  placeholder="Longitude"
+                  value={jumpLng}
+                  onChange={(e) => setJumpLng(e.target.value)}
+                  className="h-7 text-xs bg-background border-border flex-1"
+                  data-ocid="map.search_input"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 w-full text-xs"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={handleLatLngJump}
+                data-ocid="map.primary_button"
+              >
+                Go to Location
+              </Button>
+            </div>
+          </section>
+
+          <Separator className="opacity-30" />
+
+          {/* Map Overlays */}
+          <section>
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
+              <Image size={12} /> Map Overlays
+            </p>
+
+            <div className="flex gap-1.5 mb-2">
+              {/* Hidden file inputs */}
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageUpload}
+              />
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept=".pdf"
+                className="hidden"
+                onChange={handlePdfUpload}
+              />
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 flex-1 text-xs gap-1"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={() => imageInputRef.current?.click()}
+                data-ocid="overlay.upload_button"
+              >
+                <Image size={12} /> Image
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 flex-1 text-xs gap-1"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={() => pdfInputRef.current?.click()}
+                data-ocid="overlay.upload_button"
+              >
+                <FileText size={12} /> PDF
+              </Button>
+            </div>
+
+            {/* PDF Page Picker */}
+            {pdfPagePicker && (
+              <div
+                className="rounded p-2.5 mb-2 space-y-2"
+                style={{
+                  background: "rgba(167,139,250,0.08)",
+                  border: "1px solid rgba(167,139,250,0.3)",
+                }}
+                data-ocid="overlay.dialog"
+              >
+                <p
+                  className="text-xs font-semibold"
+                  style={{ color: "#a78bfa" }}
+                >
+                  PDF has {pdfPagePicker.totalPages} pages — pick one:
+                </p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={pdfPagePicker.totalPages}
+                    value={pdfPagePicker.currentPage}
+                    onChange={(e) => {
+                      const v = Number.parseInt(e.target.value, 10);
+                      if (v >= 1 && v <= pdfPagePicker.totalPages) {
+                        setPdfPagePicker((prev) =>
+                          prev ? { ...prev, currentPage: v } : prev,
+                        );
+                      }
+                    }}
+                    className="h-7 w-16 text-xs text-center bg-background border-border"
+                    data-ocid="overlay.input"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    / {pdfPagePicker.totalPages}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 flex-1 text-xs"
+                    style={{ background: "#a78bfa", color: "#1a0a2e" }}
+                    onClick={() =>
+                      renderPdfPage(
+                        pdfPagePicker.pdfDoc,
+                        pdfPagePicker.currentPage,
+                        pdfPagePicker.fileName,
+                      )
+                    }
+                    data-ocid="overlay.confirm_button"
+                  >
+                    Use This Page
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 px-2"
+                    style={{ background: "#3A424C", color: "#E9EEF3" }}
+                    onClick={() => setPdfPagePicker(null)}
+                    data-ocid="overlay.cancel_button"
+                  >
+                    <X size={12} />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Active Overlays */}
+            {overlays.length === 0 ? (
+              <div
+                className="rounded p-2 text-center text-xs text-muted-foreground"
+                style={{ background: "#1F242A" }}
+                data-ocid="overlay.empty_state"
+              >
+                No overlays yet
+              </div>
+            ) : (
+              <div className="space-y-2" data-ocid="overlay.list">
+                {overlays.map((overlay, idx) => (
+                  <div
+                    key={overlay.id}
+                    className="rounded p-2 space-y-1.5"
+                    style={{
+                      background: "#1F242A",
+                      border: "1px solid #3A424C",
+                    }}
+                    data-ocid={`overlay.item.${idx + 1}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span
+                        className="text-xs font-semibold truncate"
+                        style={{ color: "#a78bfa", maxWidth: 160 }}
+                      >
+                        {overlay.label}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveOverlay(overlay.id)}
+                        className="text-muted-foreground hover:text-destructive"
+                        data-ocid={`overlay.delete_button.${idx + 1}`}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+
+                    {/* Opacity */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground w-12">
+                        Opacity
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={Math.round(overlay.opacity * 100)}
+                        onChange={(e) =>
+                          onUpdateOverlay(overlay.id, {
+                            opacity: Number(e.target.value) / 100,
+                          })
+                        }
+                        className="flex-1 h-1.5 accent-violet-400"
+                        data-ocid={`overlay.toggle.${idx + 1}`}
+                      />
+                      <span className="text-xs text-muted-foreground w-8 text-right">
+                        {Math.round(overlay.opacity * 100)}%
+                      </span>
+                    </div>
+
+                    {/* Rotation */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground w-12">
+                        Rotate
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={360}
+                        value={overlay.rotation}
+                        onChange={(e) =>
+                          onUpdateOverlay(overlay.id, {
+                            rotation: Number(e.target.value) % 360,
+                          })
+                        }
+                        className="h-6 text-xs bg-background border-border flex-1"
+                        data-ocid={`overlay.input.${idx + 1}`}
+                      />
+                      <span className="text-xs text-muted-foreground">°</span>
+                    </div>
+
+                    {/* Scale */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground w-12">
+                        Scale
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateOverlay(overlay.id, {
+                            scale: Math.max(10, (overlay.scale || 100) - 10),
+                          })
+                        }
+                        className="w-5 h-5 rounded text-xs font-bold flex items-center justify-center hover:bg-violet-500/20"
+                        style={{
+                          background: "#2A3140",
+                          color: "#a78bfa",
+                          border: "1px solid #3A424C",
+                        }}
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        min={10}
+                        max={500}
+                        value={overlay.scale || 100}
+                        onChange={(e) =>
+                          onUpdateOverlay(overlay.id, {
+                            scale: Math.min(
+                              500,
+                              Math.max(10, Number(e.target.value)),
+                            ),
+                          })
+                        }
+                        className="flex-1 h-6 text-xs text-center rounded border"
+                        style={{
+                          background: "#2A3140",
+                          color: "#E9EEF3",
+                          border: "1px solid #3A424C",
+                        }}
+                      />
+                      <span className="text-xs text-muted-foreground">%</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateOverlay(overlay.id, {
+                            scale: Math.min(500, (overlay.scale || 100) + 10),
+                          })
+                        }
+                        className="w-5 h-5 rounded text-xs font-bold flex items-center justify-center hover:bg-violet-500/20"
+                        style={{
+                          background: "#2A3140",
+                          color: "#a78bfa",
+                          border: "1px solid #3A424C",
+                        }}
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {/* Blend Mode */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground w-12">
+                        Blend
+                      </span>
+                      <select
+                        value={overlay.blendMode || "normal"}
+                        onChange={(e) =>
+                          onUpdateOverlay(overlay.id, {
+                            blendMode: e.target.value,
+                          })
+                        }
+                        className="flex-1 h-6 text-xs rounded border"
+                        style={{
+                          background: "#2A3140",
+                          color: "#E9EEF3",
+                          border: "1px solid #3A424C",
+                        }}
+                      >
+                        <option value="normal">Normal</option>
+                        <option value="multiply">Multiply</option>
+                        <option value="screen">Screen</option>
+                        <option value="overlay">Overlay</option>
+                        <option value="darken">Darken</option>
+                      </select>
+                    </div>
+
+                    {/* Alignment helpers */}
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground">
+                        Align
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {(
+                          ["Center", "Top", "Bottom", "Left", "Right"] as const
+                        ).map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            disabled={!mapBounds}
+                            onClick={() => {
+                              if (!mapBounds) return;
+                              const [[s, w], [n, e]] = overlay.bounds;
+                              const [[ms, mw], [mn, me]] = mapBounds;
+                              const halfH = (n - s) / 2;
+                              const halfW = (e - w) / 2;
+                              const mapCLat = (mn + ms) / 2;
+                              const mapCLng = (me + mw) / 2;
+                              const curCLng = (e + w) / 2;
+                              const curCLat = (n + s) / 2;
+                              let newS = s;
+                              let newN = n;
+                              let newW = w;
+                              let newE = e;
+                              if (dir === "Center") {
+                                newS = mapCLat - halfH;
+                                newN = mapCLat + halfH;
+                                newW = mapCLng - halfW;
+                                newE = mapCLng + halfW;
+                              } else if (dir === "Top") {
+                                newN = mn;
+                                newS = mn - halfH * 2;
+                                newW = curCLng - halfW;
+                                newE = curCLng + halfW;
+                              } else if (dir === "Bottom") {
+                                newS = ms;
+                                newN = ms + halfH * 2;
+                                newW = curCLng - halfW;
+                                newE = curCLng + halfW;
+                              } else if (dir === "Left") {
+                                newW = mw;
+                                newE = mw + halfW * 2;
+                                newS = curCLat - halfH;
+                                newN = curCLat + halfH;
+                              } else {
+                                newE = me;
+                                newW = me - halfW * 2;
+                                newS = curCLat - halfH;
+                                newN = curCLat + halfH;
+                              }
+                              onUpdateOverlay(overlay.id, {
+                                bounds: [
+                                  [newS, newW],
+                                  [newN, newE],
+                                ],
+                              });
+                            }}
+                            className="text-xs px-2 py-0.5 rounded hover:bg-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                            style={{
+                              background: "#2A3140",
+                              color: "#a78bfa",
+                              border: "1px solid #3A424C",
+                            }}
+                          >
+                            {dir}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <Separator className="opacity-30" />
@@ -291,7 +856,6 @@ export function LeftSidebar({
               <Hexagon size={12} /> Drawing Tools
             </p>
 
-            {/* Tool selector palette */}
             <div className="grid grid-cols-5 gap-1 mb-2">
               {DRAW_TOOLS.map(({ tool, label, icon }) => (
                 <button
@@ -318,44 +882,77 @@ export function LeftSidebar({
               ))}
             </div>
 
-            {/* Active tool indicator */}
             <div
               className="text-xs rounded px-2 py-1 mb-2 flex items-center gap-1.5"
               style={{
                 background: drawMode
                   ? "rgba(34,197,122,0.1)"
-                  : "rgba(255,255,255,0.03)",
+                  : editMode
+                    ? "rgba(245,158,11,0.1)"
+                    : "rgba(255,255,255,0.03)",
                 border: drawMode
                   ? "1px solid rgba(34,197,122,0.4)"
-                  : "1px solid #3A424C",
-                color: drawMode ? "#22C57A" : "#7E8994",
+                  : editMode
+                    ? "1px solid rgba(245,158,11,0.4)"
+                    : "1px solid #3A424C",
+                color: drawMode ? "#22C57A" : editMode ? "#f59e0b" : "#7E8994",
               }}
             >
               <span style={{ fontWeight: 600 }}>
-                {DRAW_TOOLS.find((t) => t.tool === drawTool)?.icon}
+                {editMode ? (
+                  <Edit3 size={12} />
+                ) : (
+                  DRAW_TOOLS.find((t) => t.tool === drawTool)?.icon
+                )}
               </span>
-              <span>{DRAW_TOOLS.find((t) => t.tool === drawTool)?.desc}</span>
+              <span>
+                {editMode
+                  ? "Edit mode — drag points"
+                  : DRAW_TOOLS.find((t) => t.tool === drawTool)?.desc}
+              </span>
             </div>
 
-            {/* Action buttons */}
             <div className="grid grid-cols-2 gap-1.5">
               <Button
                 type="button"
                 size="sm"
                 className="h-8 text-xs gap-1 col-span-2"
                 onClick={onToggleDrawMode}
+                disabled={editMode}
                 style={{
                   background: drawMode ? "#22C57A" : "#3A424C",
                   color: drawMode ? "#14181D" : "#E9EEF3",
                   border: "none",
+                  opacity: editMode ? 0.4 : 1,
                 }}
                 data-ocid="tools.toggle"
               >
                 {DRAW_TOOLS.find((t) => t.tool === drawTool)?.icon}
                 {drawMode
-                  ? "Drawing — click to stop"
+                  ? "Drawing \u2014 click to stop"
                   : `Start Drawing (${DRAW_TOOLS.find((t) => t.tool === drawTool)?.label})`}
               </Button>
+
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 text-xs gap-1 col-span-2"
+                onClick={onToggleEditMode}
+                disabled={points.length === 0}
+                style={{
+                  background: editMode ? "#f59e0b" : "#3A424C",
+                  color: editMode ? "#1a0f00" : "#E9EEF3",
+                  border: editMode
+                    ? "1px solid #d97706"
+                    : "1px solid transparent",
+                  fontWeight: editMode ? 700 : 400,
+                }}
+                data-ocid="tools.edit_button"
+              >
+                <Edit3 size={12} />
+                {editMode ? "Done Editing" : "Edit Points"}
+              </Button>
+
               <Button
                 type="button"
                 size="sm"
@@ -502,7 +1099,6 @@ export function LeftSidebar({
                   </span>
                 </div>
 
-                {/* Karam measurements */}
                 {karamScale > 0 && (
                   <div
                     className="rounded p-2.5 space-y-1.5"
@@ -529,6 +1125,59 @@ export function LeftSidebar({
                       <span className="text-foreground font-medium">
                         {metersToKaram(perimeter, karamScale).toFixed(2)} karam
                       </span>
+                    </div>
+                  </div>
+                )}
+
+                {points.length >= 3 && (
+                  <div
+                    className="rounded p-2.5 space-y-1.5 mt-2"
+                    style={{
+                      background: "rgba(59,130,246,0.07)",
+                      border: "1px solid rgba(59,130,246,0.25)",
+                    }}
+                  >
+                    <p
+                      className="text-xs font-semibold"
+                      style={{ color: "#60a5fa" }}
+                    >
+                      Jammu &amp; Kashmir Government Revenue Scale
+                    </p>
+                    <div className="grid grid-cols-2 gap-1 text-xs">
+                      <div
+                        className="rounded p-1.5 text-center"
+                        style={{ background: "#1F242A" }}
+                      >
+                        <div className="font-semibold text-foreground">
+                          {sqMetersToKanal(area).toFixed(3)}
+                        </div>
+                        <div className="text-muted-foreground">Kanal</div>
+                      </div>
+                      <div
+                        className="rounded p-1.5 text-center"
+                        style={{ background: "#1F242A" }}
+                      >
+                        <div className="font-semibold text-foreground">
+                          {sqMetersToMarla(area).toFixed(2)}
+                        </div>
+                        <div className="text-muted-foreground">Marla</div>
+                      </div>
+                      <div
+                        className="rounded p-1.5 text-center col-span-2"
+                        style={{ background: "#1F242A" }}
+                      >
+                        <div className="font-semibold text-foreground">
+                          {sqMetersToSarsi(area).toFixed(2)}
+                        </div>
+                        <div className="text-muted-foreground">Sarsi</div>
+                      </div>
+                    </div>
+                    <div
+                      className="text-xs text-muted-foreground mt-1"
+                      style={{ fontSize: 9 }}
+                    >
+                      1 Kanal = 20 Marla \u00b7 1 Marla = 9 Sarsi \u00b7 1 Acre
+                      = 8 Kanal
                     </div>
                   </div>
                 )}
@@ -565,13 +1214,18 @@ export function LeftSidebar({
                   <div
                     key={`pt-${idx}-${lat.toFixed(4)}-${lng.toFixed(4)}`}
                     className="flex items-center justify-between rounded px-2 py-1"
-                    style={{ background: "#1F242A" }}
+                    style={{
+                      background: "#1F242A",
+                      border: editMode
+                        ? "1px solid rgba(245,158,11,0.25)"
+                        : "1px solid transparent",
+                    }}
                     data-ocid={`points.item.${idx + 1}`}
                   >
                     <div className="flex items-center gap-2">
                       <span
                         className="text-xs font-bold w-4 text-center"
-                        style={{ color: "#22C57A" }}
+                        style={{ color: editMode ? "#f59e0b" : "#22C57A" }}
                       >
                         {idx + 1}
                       </span>

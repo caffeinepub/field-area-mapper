@@ -73,3 +73,42 @@ export function sqMetersToSqKaram(sqm: number, feetPerKaram: number): number {
   const sqFeet = sqm * 10.7639;
   return sqFeet / (feetPerKaram * feetPerKaram);
 }
+
+// Compute angle in degrees at `vertex` formed by rays to p1 and p2
+export function computeAngle(
+  vertex: [number, number],
+  p1: [number, number],
+  p2: [number, number],
+): number {
+  const toRad = Math.PI / 180;
+  const lat0 = vertex[0] * toRad;
+  const lng0 = vertex[1] * toRad;
+  const lat1 = p1[0] * toRad;
+  const lng1 = p1[1] * toRad;
+  const lat2 = p2[0] * toRad;
+  const lng2 = p2[1] * toRad;
+  const v1 = [lat1 - lat0, (lng1 - lng0) * Math.cos(lat0)];
+  const v2 = [lat2 - lat0, (lng2 - lng0) * Math.cos(lat0)];
+  const dot = v1[0] * v2[0] + v1[1] * v2[1];
+  const mag1 = Math.sqrt(v1[0] ** 2 + v1[1] ** 2);
+  const mag2 = Math.sqrt(v2[0] ** 2 + v2[1] ** 2);
+  if (mag1 === 0 || mag2 === 0) return 0;
+  return (
+    (Math.acos(Math.max(-1, Math.min(1, dot / (mag1 * mag2)))) * 180) / Math.PI
+  );
+}
+
+// Pakistani land units (based on sq feet)
+// 1 Sarsi = 30.25 sq ft
+// 1 Marla = 9 Sarsi = 272.25 sq ft
+// 1 Kanal = 20 Marla = 5445 sq ft
+// 1 Acre = 8 Kanal
+export function sqMetersToMarla(sqm: number): number {
+  return (sqm * 10.7639) / 272.25;
+}
+export function sqMetersToKanal(sqm: number): number {
+  return (sqm * 10.7639) / 5445;
+}
+export function sqMetersToSarsi(sqm: number): number {
+  return (sqm * 10.7639) / 30.25;
+}

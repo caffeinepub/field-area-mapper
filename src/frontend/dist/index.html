@@ -6,6 +6,7 @@
     <meta name="description" content="Measure field areas using GPS data and satellite imagery. Export to AutoCAD DXF." />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
       .area-tooltip {
         background: rgba(20,24,29,0.92);
@@ -21,10 +22,15 @@
       .area-tooltip::before { display: none; }
       .leaflet-container { font-family: inherit; }
     </style>
-    <script type="module" crossorigin src="/assets/index-BTNPABq7.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CgikcYlc.css">
+    <script type="module" crossorigin src="/assets/index-Btw1xR9t.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-C62nJSng.css">
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+    </script>
   </body>
 </html>

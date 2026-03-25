@@ -2,7 +2,9 @@ import { LocateFixed } from "lucide-react";
 /* global L */
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { OverlayItem } from "../App";
 import {
+  computeAngle,
   feetToInches,
   haversineDistance,
   metersToFeet,
@@ -16,20 +18,37 @@ const SAT_URL =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const LABELS_URL =
   "https://stamen-tiles-{s}.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png";
+const GOOGLE_SAT_URL = "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";
 
-export type TileMode = "osm" | "satellite" | "hybrid";
-export type DrawTool = "polygon" | "polyline" | "line" | "rectangle" | "circle";
+export type TileMode = "osm" | "satellite" | "hybrid" | "google";
+export type DrawTool =
+  | "polygon"
+  | "polyline"
+  | "line"
+  | "rectangle"
+  | "circle"
+  | "angle";
 
 interface MapViewProps {
   points: [number, number][];
   drawMode: boolean;
+  editMode: boolean;
   tileMode: TileMode;
   fitBoundsKey: number;
   area: number;
   karamScale?: number;
   drawTool: DrawTool;
+  searchTarget: { lat: number; lng: number; key: number } | null;
+  overlays: OverlayItem[];
   onAddPoint: (lat: number, lng: number) => void;
   onSetPoints?: (points: [number, number][]) => void;
+  onOverlayUpdate: (
+    id: string,
+    bounds: [[number, number], [number, number]],
+    rotation: number,
+    opacity: number,
+  ) => void;
+  onBoundsChange?: (bounds: [[number, number], [number, number]]) => void;
 }
 
 function formatSegmentDistance(meters: number): string {
@@ -48,7 +67,7 @@ function circlePoints(
   edge: [number, number],
   numPts = 32,
 ): [number, number][] {
-  const R = 6371000; // Earth radius in meters
+  const R = 6371000;
   const lat1 = (center[0] * Math.PI) / 180;
   const lng1 = (center[1] * Math.PI) / 180;
   const lat2 = (edge[0] * Math.PI) / 180;
@@ -58,7 +77,7 @@ function circlePoints(
   const a =
     Math.sin(dlat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlng / 2) ** 2;
-  const radius = 2 * R * Math.asin(Math.sqrt(a)); // meters
+  const radius = 2 * R * Math.asin(Math.sqrt(a));
 
   const pts: [number, number][] = [];
   for (let i = 0; i < numPts; i++) {
@@ -94,6 +113,8 @@ function rectanglePoints(
 
 const DIST_LABEL_STYLE_ID = "terra-dist-label-style";
 const GPS_PULSE_STYLE_ID = "terra-gps-pulse-style";
+const EDIT_HANDLE_STYLE_ID = "terra-edit-handle-style";
+const OVERLAY_HANDLE_STYLE_ID = "terra-overlay-handle-style";
 
 function ensureDistLabelStyle() {
   if (document.getElementById(DIST_LABEL_STYLE_ID)) return;
@@ -128,31 +149,88 @@ function ensureGpsPulseStyle() {
   document.head.appendChild(style);
 }
 
+function ensureEditHandleStyle() {
+  if (document.getElementById(EDIT_HANDLE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = EDIT_HANDLE_STYLE_ID;
+  style.textContent = `
+    .edit-handle {
+      width: 14px;
+      height: 14px;
+      background: #f59e0b;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      cursor: grab;
+      box-shadow: 0 0 0 2px rgba(245,158,11,0.4);
+      transition: transform 0.1s;
+    }
+    .edit-handle:hover { transform: scale(1.4); cursor: grab; }
+    .edit-handle:active { cursor: grabbing; }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureOverlayHandleStyle() {
+  if (document.getElementById(OVERLAY_HANDLE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = OVERLAY_HANDLE_STYLE_ID;
+  style.textContent = `
+    .overlay-handle {
+      width: 12px;
+      height: 12px;
+      background: #a78bfa;
+      border-radius: 3px;
+      border: 2px solid #fff;
+      cursor: move;
+      box-shadow: 0 0 0 2px rgba(167,139,250,0.4);
+    }
+    .overlay-handle:hover { background: #c4b5fd; }
+  `;
+  document.head.appendChild(style);
+}
+
 export function MapView({
   points,
   drawMode,
+  editMode,
   tileMode,
   fitBoundsKey,
   area,
   karamScale,
   drawTool,
+  searchTarget,
+  overlays,
   onAddPoint,
   onSetPoints,
+  onOverlayUpdate,
+  onBoundsChange,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseTileRef = useRef<any>(null);
   const overlayTileRef = useRef<any>(null);
   const layersGroupRef = useRef<any>(null);
+  const editGroupRef = useRef<any>(null);
+  const overlayGroupRef = useRef<any>(null);
   const onAddPointRef = useRef(onAddPoint);
+  const onBoundsChangeRef = useRef(onBoundsChange);
+  useEffect(() => {
+    onBoundsChangeRef.current = onBoundsChange;
+  }, [onBoundsChange]);
   const onSetPointsRef = useRef(onSetPoints);
   const tempPointRef = useRef<[number, number] | null>(null);
+  const pointsRef = useRef(points);
+  const coordPopupRef = useRef<any>(null);
+  const searchPinRef = useRef<any>(null);
 
   // GPS tracking refs
   const watchIdRef = useRef<number | null>(null);
   const gpsMarkerRef = useRef<any>(null);
   const gpsCircleRef = useRef<any>(null);
   const firstFixRef = useRef(true);
+
+  const drawModeRef = useRef(drawMode);
+  const editModeRef = useRef(editMode);
 
   const [isTracking, setIsTracking] = useState(false);
 
@@ -164,12 +242,26 @@ export function MapView({
     onSetPointsRef.current = onSetPoints;
   }, [onSetPoints]);
 
-  // Initialize map once (empty deps is intentional)
+  useEffect(() => {
+    pointsRef.current = points;
+  }, [points]);
+
+  useEffect(() => {
+    drawModeRef.current = drawMode;
+  }, [drawMode]);
+
+  useEffect(() => {
+    editModeRef.current = editMode;
+  }, [editMode]);
+
+  // Initialize map once
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
     ensureDistLabelStyle();
     ensureGpsPulseStyle();
+    ensureEditHandleStyle();
+    ensureOverlayHandleStyle();
 
     const map = L.map(containerRef.current, { zoomControl: true }).setView(
       [40.7128, -74.006],
@@ -178,7 +270,8 @@ export function MapView({
     mapRef.current = map;
 
     const tileLayer = L.tileLayer(OSM_URL, {
-      maxZoom: 20,
+      maxZoom: 22,
+      maxNativeZoom: 19,
       attribution: "\u00a9 OpenStreetMap contributors",
     }).addTo(map);
     baseTileRef.current = tileLayer;
@@ -186,36 +279,78 @@ export function MapView({
     const layersGroup = L.layerGroup().addTo(map);
     layersGroupRef.current = layersGroup;
 
+    const editGroup = L.layerGroup().addTo(map);
+    editGroupRef.current = editGroup;
+
+    const overlayGroup = L.layerGroup().addTo(map);
+    overlayGroupRef.current = overlayGroup;
+
+    // Coordinate popup on map click
+    const coordPopup = L.popup({
+      closeButton: true,
+      className: "coord-popup",
+    });
+    coordPopupRef.current = coordPopup;
+
+    const emitBounds = () => {
+      if (onBoundsChangeRef.current) {
+        const b = map.getBounds();
+        onBoundsChangeRef.current([
+          [b.getSouth(), b.getWest()],
+          [b.getNorth(), b.getEast()],
+        ]);
+      }
+    };
+    map.on("moveend", emitBounds);
+    emitBounds();
+
+    map.on("click", (e: any) => {
+      if (drawModeRef.current || editModeRef.current) return;
+      const lat = (e.latlng.lat as number).toFixed(6);
+      const lng = (e.latlng.lng as number).toFixed(6);
+      const content = `
+        <div style="font-family:monospace;font-size:12px;color:#E9EEF3;background:#2B3138;padding:8px 10px;border-radius:6px;min-width:180px">
+          <div style="margin-bottom:4px;"><span style="color:#AAB3BD">Lat:</span> <b>${lat}</b></div>
+          <div style="margin-bottom:8px;"><span style="color:#AAB3BD">Lng:</span> <b>${lng}</b></div>
+          <button onclick="navigator.clipboard.writeText('${lat}, ${lng}').then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy Coordinates'},1200)})" style="background:#22C57A;color:#14181D;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;width:100%">Copy Coordinates</button>
+        </div>
+      `;
+      coordPopup.setLatLng(e.latlng).setContent(content).openOn(map);
+    });
+
     return () => {
       map.remove();
       mapRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Update cursor based on draw mode
+  // Update cursor based on draw/edit mode
   useEffect(() => {
     if (!mapRef.current) return;
     const container = mapRef.current.getContainer() as HTMLElement;
-    container.style.cursor = drawMode ? "crosshair" : "";
-  }, [drawMode]);
+    if (editMode) {
+      container.style.cursor = "default";
+    } else if (drawMode) {
+      container.style.cursor = "crosshair";
+    } else {
+      container.style.cursor = "";
+    }
+  }, [drawMode, editMode]);
 
-  // Click handler — re-attached when drawMode or drawTool changes
+  // Click handler for drawing — re-attached when drawMode or drawTool changes
   useEffect(() => {
     if (!mapRef.current) return;
-    // Reset temp point when tool or mode changes
     tempPointRef.current = null;
     const map = mapRef.current;
     const handler = (e: any) => {
-      if (!drawMode) return;
+      if (!drawModeRef.current || editModeRef.current) return;
       const lat = e.latlng.lat as number;
       const lng = e.latlng.lng as number;
 
       if (drawTool === "rectangle") {
         if (!tempPointRef.current) {
-          // First corner
           tempPointRef.current = [lat, lng];
         } else {
-          // Second corner — compute rectangle
           const pts = rectanglePoints(tempPointRef.current, [lat, lng]);
           tempPointRef.current = null;
           onSetPointsRef.current?.(pts);
@@ -225,10 +360,8 @@ export function MapView({
 
       if (drawTool === "circle") {
         if (!tempPointRef.current) {
-          // Center
           tempPointRef.current = [lat, lng];
         } else {
-          // Edge — compute circle approximation
           const pts = circlePoints(tempPointRef.current, [lat, lng]);
           tempPointRef.current = null;
           onSetPointsRef.current?.(pts);
@@ -236,14 +369,52 @@ export function MapView({
         return;
       }
 
-      // polygon, polyline, line
       onAddPointRef.current(lat, lng);
     };
-    map.on("click", handler);
-    return () => {
-      map.off("click", handler);
+    map.on("draw-click", handler);
+    // We need a separate named handler to avoid clearing the coord popup handler
+    // Use a dedicated event channel via a wrapper
+    const drawClickWrapper = (e: any) => {
+      if (!drawModeRef.current || editModeRef.current) return;
+      handler(e);
     };
-  }, [drawMode, drawTool]);
+    map.on("click", drawClickWrapper);
+    return () => {
+      map.off("click", drawClickWrapper);
+    };
+  }, [drawTool]); // drawMode/editMode accessed via refs so not needed as deps
+
+  // Edit handles — render draggable markers when editMode is active
+  useEffect(() => {
+    if (!editGroupRef.current) return;
+    const group = editGroupRef.current;
+    group.clearLayers();
+
+    if (!editMode || points.length === 0) return;
+
+    points.forEach((pt, idx) => {
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="edit-handle"></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+
+      const marker = L.marker(pt, {
+        icon,
+        draggable: true,
+        zIndexOffset: 2000,
+      });
+      marker.on("dragend", (e: any) => {
+        const { lat, lng } = e.target.getLatLng();
+        const updated = pointsRef.current.map((p, i) =>
+          i === idx ? ([lat, lng] as [number, number]) : p,
+        );
+        onSetPointsRef.current?.(updated);
+      });
+      marker.addTo(group);
+    });
+  }, [editMode, points]);
 
   // Update tile layers
   useEffect(() => {
@@ -259,6 +430,11 @@ export function MapView({
       baseTileRef.current.setUrl(OSM_URL);
     } else if (tileMode === "satellite") {
       baseTileRef.current.setUrl(SAT_URL);
+      baseTileRef.current.options.maxNativeZoom = 19;
+    } else if (tileMode === "google") {
+      baseTileRef.current.setUrl(GOOGLE_SAT_URL);
+      baseTileRef.current.options.subdomains = ["0", "1", "2", "3"];
+      baseTileRef.current.options.maxNativeZoom = 20;
     } else {
       baseTileRef.current.setUrl(SAT_URL);
       overlayTileRef.current = L.tileLayer(LABELS_URL, {
@@ -284,6 +460,60 @@ export function MapView({
       drawTool === "circle";
     const isOpenPath = drawTool === "polyline" || drawTool === "line";
 
+    // Angle tool rendering
+    if (drawTool === "angle" && points.length >= 2) {
+      const [vertex, p1, p2] = points;
+      L.circleMarker(vertex, {
+        radius: 5,
+        color: "#FFD700",
+        fillColor: "#FFD700",
+        fillOpacity: 1,
+        weight: 2,
+      }).addTo(group);
+      if (p1)
+        L.circleMarker(p1, {
+          radius: 5,
+          color: "#FFD700",
+          fillColor: "#FFD700",
+          fillOpacity: 1,
+          weight: 2,
+        }).addTo(group);
+      if (p2) {
+        L.circleMarker(p2, {
+          radius: 5,
+          color: "#FFD700",
+          fillColor: "#FFD700",
+          fillOpacity: 1,
+          weight: 2,
+        }).addTo(group);
+        L.polyline([p1, vertex, p2], { color: "#FFD700", weight: 2 }).addTo(
+          group,
+        );
+        L.circleMarker(vertex, {
+          radius: 8,
+          color: "#FFD700",
+          fill: false,
+          weight: 2,
+        }).addTo(group);
+        const angleDeg = computeAngle(vertex, p1, p2);
+        L.tooltip({
+          permanent: true,
+          direction: "top",
+          className: "dist-label",
+        })
+          .setContent(`\u2220 ${angleDeg.toFixed(1)}\u00b0`)
+          .setLatLng(vertex)
+          .addTo(group);
+      } else if (p1) {
+        L.polyline([vertex, p1], {
+          color: "#FFD700",
+          weight: 2,
+          dashArray: "4 4",
+        }).addTo(group);
+      }
+      return;
+    }
+
     if (points.length >= 3 && isClosedShape) {
       L.polygon(points, {
         color: GREEN,
@@ -300,7 +530,7 @@ export function MapView({
         let areaContent = `Area: ${acres} ac`;
         if (karamScale && karamScale > 0) {
           const sqKaram = sqMetersToSqKaram(area, karamScale).toFixed(2);
-          areaContent += `<br/>${sqKaram} karam²`;
+          areaContent += `<br/>${sqKaram} karam\u00b2`;
         }
 
         L.tooltip({
@@ -316,7 +546,6 @@ export function MapView({
     } else if (isOpenPath && points.length >= 2) {
       L.polyline(points, { color: GREEN, weight: 2.5 }).addTo(group);
 
-      // Total distance label at midpoint of last segment
       let totalDist = 0;
       for (let i = 0; i < points.length - 1; i++) {
         totalDist += haversineDistance(points[i], points[i + 1]);
@@ -332,11 +561,9 @@ export function MapView({
         .addTo(group);
     } else if (points.length === 2 && isClosedShape) {
       L.polyline(points, { color: GREEN, weight: 2.5 }).addTo(group);
-    } else if (points.length === 1 && isClosedShape) {
-      // single point - just marker below
     }
 
-    // Draw segment distance labels for open paths
+    // Segment distance labels for open paths
     if (isOpenPath) {
       for (let i = 0; i < points.length - 1; i++) {
         const a = points[i];
@@ -356,7 +583,7 @@ export function MapView({
       }
     }
 
-    // Draw segment distance labels for closed shapes
+    // Segment distance labels for closed shapes
     if (isClosedShape && points.length >= 3) {
       const segmentPoints = [...points, points[0]];
       for (let i = 0; i < segmentPoints.length - 1; i++) {
@@ -377,7 +604,7 @@ export function MapView({
       }
     }
 
-    // Vertex markers (skip for circle/rectangle which have many points)
+    // Vertex markers
     const showVertices =
       drawTool === "polygon" || drawTool === "polyline" || drawTool === "line";
     if (showVertices) {
@@ -408,6 +635,114 @@ export function MapView({
     if (!mapRef.current || points.length < 2 || fitBoundsKey === 0) return;
     mapRef.current.fitBounds(L.latLngBounds(points), { padding: [40, 40] });
   }, [fitBoundsKey]);
+
+  // Handle searchTarget — fly to location and drop a search pin
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by searchTarget.key
+  useEffect(() => {
+    if (!searchTarget || !mapRef.current) return;
+    const map = mapRef.current;
+    const { lat, lng } = searchTarget;
+
+    map.flyTo([lat, lng], 16, { duration: 1.2 });
+
+    if (searchPinRef.current) {
+      searchPinRef.current.remove();
+      searchPinRef.current = null;
+    }
+
+    const pinIcon = L.divIcon({
+      className: "",
+      html: `<div style="width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:20px solid #ef4444;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));position:relative;top:-20px;"></div>`,
+      iconSize: [16, 20],
+      iconAnchor: [8, 20],
+    });
+
+    const marker = L.marker([lat, lng], { icon: pinIcon, zIndexOffset: 3000 });
+    marker
+      .bindPopup(
+        `<div style="font-family:monospace;font-size:12px;color:#E9EEF3;background:#2B3138;padding:6px 10px;border-radius:6px">
+          <b style="color:#ef4444">Search Result</b><br/>
+          Lat: ${lat.toFixed(6)}<br/>Lng: ${lng.toFixed(6)}
+        </div>`,
+        { className: "coord-popup" },
+      )
+      .addTo(map)
+      .openPopup();
+
+    searchPinRef.current = marker;
+  }, [searchTarget?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Render image overlays
+  useEffect(() => {
+    if (!overlayGroupRef.current || !mapRef.current) return;
+    const group = overlayGroupRef.current;
+    group.clearLayers();
+
+    for (const overlay of overlays) {
+      const { id, dataUrl, bounds, opacity, rotation, blendMode } = overlay;
+
+      const imgOverlay = L.imageOverlay(dataUrl, bounds, {
+        opacity,
+        interactive: false,
+      }).addTo(group);
+
+      // Apply CSS rotation and blend mode to the image element
+      const applyStyles = () => {
+        const el = imgOverlay.getElement() as HTMLElement | null;
+        if (el) {
+          el.style.transformOrigin = "center center";
+          el.style.transform = `rotate(${rotation}deg)`;
+          el.style.mixBlendMode = blendMode || "normal";
+        }
+      };
+      imgOverlay.on("load", applyStyles);
+      applyStyles();
+
+      // Corner handles: NW, NE, SE, SW
+      const sw = bounds[0];
+      const ne = bounds[1];
+      const corners: [number, number][] = [
+        [ne[0], sw[1]], // NW
+        [ne[0], ne[1]], // NE
+        [sw[0], ne[1]], // SE
+        [sw[0], sw[1]], // SW
+      ];
+      const cornerNames = ["NW", "NE", "SE", "SW"];
+
+      corners.forEach((corner, ci) => {
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="overlay-handle" title="${cornerNames[ci]}"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        });
+        const handle = L.marker(corner, {
+          icon,
+          draggable: true,
+          zIndexOffset: 2500,
+        });
+        handle.on("drag", (e: any) => {
+          const { lat, lng } = e.target.getLatLng();
+          // Update the corresponding corner and recompute bounds
+          const updatedCorners = corners.map((c, i) =>
+            i === ci ? [lat, lng] : c,
+          ) as [number, number][];
+          // NW=0,NE=1,SE=2,SW=3
+          const newSouth = Math.min(updatedCorners[2][0], updatedCorners[3][0]);
+          const newNorth = Math.max(updatedCorners[0][0], updatedCorners[1][0]);
+          const newWest = Math.min(updatedCorners[0][1], updatedCorners[3][1]);
+          const newEast = Math.max(updatedCorners[1][1], updatedCorners[2][1]);
+          const newBounds: [[number, number], [number, number]] = [
+            [newSouth, newWest],
+            [newNorth, newEast],
+          ];
+          imgOverlay.setBounds(newBounds);
+          onOverlayUpdate(id, newBounds, rotation, opacity);
+        });
+        handle.addTo(group);
+      });
+    }
+  }, [overlays, onOverlayUpdate]);
 
   // Cleanup GPS on unmount
   useEffect(() => {
