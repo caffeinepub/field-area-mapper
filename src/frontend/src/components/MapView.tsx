@@ -49,6 +49,12 @@ interface MapViewProps {
     opacity: number,
   ) => void;
   onBoundsChange?: (bounds: [[number, number], [number, number]]) => void;
+  anchorPickModeId?: string | null;
+  onSetAnchorPickMode?: (id: string | null) => void;
+  onSetOverlayAnchor?: (
+    id: string,
+    anchor: { relLat: number; relLng: number },
+  ) => void;
 }
 
 function formatSegmentDistance(meters: number): string {
@@ -170,6 +176,8 @@ function ensureEditHandleStyle() {
   document.head.appendChild(style);
 }
 
+const ANCHOR_HANDLE_STYLE_ID = "terra-anchor-handle-style";
+
 function ensureOverlayHandleStyle() {
   if (document.getElementById(OVERLAY_HANDLE_STYLE_ID)) return;
   const style = document.createElement("style");
@@ -189,6 +197,55 @@ function ensureOverlayHandleStyle() {
   document.head.appendChild(style);
 }
 
+function ensureAnchorHandleStyle() {
+  if (document.getElementById(ANCHOR_HANDLE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = ANCHOR_HANDLE_STYLE_ID;
+  style.textContent = `
+    .anchor-handle {
+      width: 20px;
+      height: 20px;
+      position: relative;
+      cursor: grab;
+    }
+    .anchor-handle::before,
+    .anchor-handle::after {
+      content: "";
+      position: absolute;
+      background: #06b6d4;
+    }
+    .anchor-handle::before {
+      width: 2px;
+      height: 100%;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+    }
+    .anchor-handle::after {
+      width: 100%;
+      height: 2px;
+      top: 50%;
+      left: 0;
+      transform: translateY(-50%);
+    }
+    .anchor-handle-dot {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      background: #06b6d4;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 0 2px rgba(6,182,212,0.4);
+      z-index: 1;
+    }
+    .anchor-handle:active { cursor: grabbing; }
+  `;
+  document.head.appendChild(style);
+}
+
 export function MapView({
   points,
   drawMode,
@@ -204,6 +261,9 @@ export function MapView({
   onSetPoints,
   onOverlayUpdate,
   onBoundsChange,
+  anchorPickModeId,
+  onSetAnchorPickMode,
+  onSetOverlayAnchor,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -218,6 +278,9 @@ export function MapView({
     onBoundsChangeRef.current = onBoundsChange;
   }, [onBoundsChange]);
   const onSetPointsRef = useRef(onSetPoints);
+  const anchorPickModeIdRef = useRef(anchorPickModeId);
+  const onSetAnchorPickModeRef = useRef(onSetAnchorPickMode);
+  const onSetOverlayAnchorRef = useRef(onSetOverlayAnchor);
   const tempPointRef = useRef<[number, number] | null>(null);
   const pointsRef = useRef(points);
   const coordPopupRef = useRef<any>(null);
@@ -243,6 +306,18 @@ export function MapView({
   }, [onSetPoints]);
 
   useEffect(() => {
+    anchorPickModeIdRef.current = anchorPickModeId;
+  }, [anchorPickModeId]);
+
+  useEffect(() => {
+    onSetAnchorPickModeRef.current = onSetAnchorPickMode;
+  }, [onSetAnchorPickMode]);
+
+  useEffect(() => {
+    onSetOverlayAnchorRef.current = onSetOverlayAnchor;
+  }, [onSetOverlayAnchor]);
+
+  useEffect(() => {
     pointsRef.current = points;
   }, [points]);
 
@@ -262,6 +337,7 @@ export function MapView({
     ensureGpsPulseStyle();
     ensureEditHandleStyle();
     ensureOverlayHandleStyle();
+    ensureAnchorHandleStyle();
 
     const map = L.map(containerRef.current, { zoomControl: true }).setView(
       [40.7128, -74.006],
@@ -679,7 +755,8 @@ export function MapView({
     group.clearLayers();
 
     for (const overlay of overlays) {
-      const { id, dataUrl, bounds, opacity, rotation, blendMode } = overlay;
+      const { id, dataUrl, bounds, opacity, rotation, blendMode, anchorPoint } =
+        overlay;
 
       const imgOverlay = L.imageOverlay(dataUrl, bounds, {
         opacity,
@@ -741,6 +818,70 @@ export function MapView({
         });
         handle.addTo(group);
       });
+
+      // Transparent click rectangle for anchor pick mode
+      const [south, west] = bounds[0];
+      const [north, east] = bounds[1];
+      const pickRect = L.rectangle(
+        [
+          [south, west],
+          [north, east],
+        ],
+        {
+          color: "transparent",
+          fillColor: "transparent",
+          fillOpacity: 0,
+          opacity: 0,
+          interactive: true,
+          bubblingMouseEvents: false,
+        },
+      ).addTo(group);
+
+      pickRect.on("click", (e: any) => {
+        if (anchorPickModeIdRef.current !== id) return;
+        L.DomEvent.stopPropagation(e);
+        const clickLat = e.latlng.lat as number;
+        const clickLng = e.latlng.lng as number;
+        const relLat = (clickLat - south) / (north - south);
+        const relLng = (clickLng - west) / (east - west);
+        onSetOverlayAnchorRef.current?.(id, {
+          relLat: Math.max(0, Math.min(1, relLat)),
+          relLng: Math.max(0, Math.min(1, relLng)),
+        });
+        onSetAnchorPickModeRef.current?.(null);
+      });
+
+      // Anchor marker — draggable crosshair at anchor point
+      if (anchorPoint) {
+        const anchorLat = south + anchorPoint.relLat * (north - south);
+        const anchorLng = west + anchorPoint.relLng * (east - west);
+
+        const anchorIcon = L.divIcon({
+          className: "",
+          html: `<div class="anchor-handle"><div class="anchor-handle-dot"></div></div>`,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        });
+
+        const anchorMarker = L.marker([anchorLat, anchorLng], {
+          icon: anchorIcon,
+          draggable: true,
+          zIndexOffset: 3000,
+        }).addTo(group);
+
+        anchorMarker.on("drag", (e: any) => {
+          const { lat: newLat, lng: newLng } = e.target.getLatLng();
+          // Compute delta and shift the entire overlay bounds
+          const deltaLat = newLat - anchorLat;
+          const deltaLng = newLng - anchorLng;
+          const newBounds: [[number, number], [number, number]] = [
+            [south + deltaLat, west + deltaLng],
+            [north + deltaLat, east + deltaLng],
+          ];
+          imgOverlay.setBounds(newBounds);
+          onOverlayUpdate(id, newBounds, rotation, opacity);
+        });
+      }
     }
   }, [overlays, onOverlayUpdate]);
 

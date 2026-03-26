@@ -53,6 +53,7 @@ interface LeftSidebarProps {
   karamScale: number;
   drawTool: DrawTool;
   overlays: OverlayItem[];
+  anchorPickModeId: string | null;
   onKaramScaleChange: (value: number) => void;
   onTileModeChange: (mode: TileMode) => void;
   onToggleDrawMode: () => void;
@@ -78,6 +79,7 @@ interface LeftSidebarProps {
   ) => void;
   mapBounds: [[number, number], [number, number]] | null;
   onRemoveOverlay: (id: string) => void;
+  onAnchorPickMode: (id: string | null) => void;
 }
 
 const DRAW_TOOLS: {
@@ -134,6 +136,7 @@ export function LeftSidebar({
   karamScale,
   drawTool,
   overlays,
+  anchorPickModeId,
   onKaramScaleChange,
   onTileModeChange,
   onToggleDrawMode,
@@ -150,6 +153,7 @@ export function LeftSidebar({
   onAddOverlay,
   onUpdateOverlay,
   onRemoveOverlay,
+  onAnchorPickMode,
   mapBounds,
 }: LeftSidebarProps) {
   const area = calculateArea(points);
@@ -314,6 +318,13 @@ export function LeftSidebar({
     }
   }
 
+  // Computed values used in measurements panel
+  const kanal = sqMetersToKanal(area);
+  const marla = sqMetersToMarla(area);
+  const sarsi = sqMetersToSarsi(area);
+  const sqKaram = sqMetersToSqKaram(area, karamScale);
+  const perimKaram = metersToKaram(perimeter, karamScale);
+
   return (
     <div
       className="flex flex-col h-full"
@@ -454,8 +465,8 @@ export function LeftSidebar({
               <Image size={12} /> Map Overlays
             </p>
 
+            {/* Upload buttons */}
             <div className="flex gap-1.5 mb-2">
-              {/* Hidden file inputs */}
               <input
                 ref={imageInputRef}
                 type="file"
@@ -466,36 +477,36 @@ export function LeftSidebar({
               <input
                 ref={pdfInputRef}
                 type="file"
-                accept=".pdf"
+                accept="application/pdf"
                 className="hidden"
                 onChange={handlePdfUpload}
               />
               <Button
                 type="button"
                 size="sm"
-                className="h-8 flex-1 text-xs gap-1"
+                className="h-7 flex-1 text-xs gap-1"
                 style={{ background: "#3A424C", color: "#E9EEF3" }}
                 onClick={() => imageInputRef.current?.click()}
                 data-ocid="overlay.upload_button"
               >
-                <Image size={12} /> Image
+                <Image size={11} /> Image
               </Button>
               <Button
                 type="button"
                 size="sm"
-                className="h-8 flex-1 text-xs gap-1"
+                className="h-7 flex-1 text-xs gap-1"
                 style={{ background: "#3A424C", color: "#E9EEF3" }}
                 onClick={() => pdfInputRef.current?.click()}
                 data-ocid="overlay.upload_button"
               >
-                <FileText size={12} /> PDF
+                <FileText size={11} /> PDF
               </Button>
             </div>
 
-            {/* PDF Page Picker */}
+            {/* PDF page picker */}
             {pdfPagePicker && (
               <div
-                className="rounded p-2.5 mb-2 space-y-2"
+                className="rounded p-2 space-y-1.5 mb-2"
                 style={{
                   background: "rgba(167,139,250,0.08)",
                   border: "1px solid rgba(167,139,250,0.3)",
@@ -789,7 +800,7 @@ export function LeftSidebar({
                                 ],
                               });
                             }}
-                            className="text-xs px-2 py-0.5 rounded hover:bg-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="px-2 py-0.5 text-xs rounded transition-colors"
                             style={{
                               background: "#2A3140",
                               color: "#a78bfa",
@@ -801,6 +812,73 @@ export function LeftSidebar({
                         ))}
                       </div>
                     </div>
+
+                    {/* Anchor-point drag */}
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground">
+                        Drag Anchor
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (anchorPickModeId === overlay.id) {
+                            onAnchorPickMode(null);
+                          } else {
+                            onAnchorPickMode(overlay.id);
+                            toast.info("Click the overlay to set anchor point");
+                          }
+                        }}
+                        className="w-full h-6 text-xs rounded flex items-center justify-center gap-1 transition-colors"
+                        style={{
+                          background:
+                            anchorPickModeId === overlay.id
+                              ? "rgba(6,182,212,0.2)"
+                              : "#2A3140",
+                          color:
+                            anchorPickModeId === overlay.id
+                              ? "#06b6d4"
+                              : overlay.anchorPoint
+                                ? "#06b6d4"
+                                : "#a78bfa",
+                          border:
+                            anchorPickModeId === overlay.id
+                              ? "1px solid #06b6d4"
+                              : overlay.anchorPoint
+                                ? "1px solid rgba(6,182,212,0.5)"
+                                : "1px solid #3A424C",
+                        }}
+                        data-ocid={`overlay.toggle.${idx + 1}`}
+                      >
+                        {anchorPickModeId === overlay.id ? (
+                          <span style={{ color: "#f59e0b" }}>
+                            ✦ Click overlay to set anchor
+                          </span>
+                        ) : overlay.anchorPoint ? (
+                          "⊕ Anchor set — drag crosshair"
+                        ) : (
+                          "⊕ Set Drag Anchor"
+                        )}
+                      </button>
+                      {overlay.anchorPoint && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateOverlay(overlay.id, {
+                              bounds: overlay.bounds,
+                            })
+                          }
+                          className="w-full h-5 text-xs rounded flex items-center justify-center"
+                          style={{
+                            background: "transparent",
+                            color: "#64748b",
+                            border: "1px solid #3A424C",
+                            fontSize: 10,
+                          }}
+                        >
+                          Clear anchor
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -809,14 +887,98 @@ export function LeftSidebar({
 
           <Separator className="opacity-30" />
 
-          {/* Scale / Karam */}
+          {/* Measurements */}
+          {points.length >= 3 && (
+            <section>
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Ruler size={12} /> Measurements
+              </p>
+              <div
+                className="rounded p-2 space-y-1"
+                style={{ background: "#1F242A", border: "1px solid #3A424C" }}
+              >
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Area (acres)</span>
+                  <span style={{ color: "#E9EEF3" }}>{acres.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Area (ha)</span>
+                  <span style={{ color: "#E9EEF3" }}>
+                    {hectares.toFixed(4)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Area (sq ft)</span>
+                  <span style={{ color: "#E9EEF3" }}>{sqFeet.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Area (m²)</span>
+                  <span style={{ color: "#E9EEF3" }}>{area.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Perimeter</span>
+                  <span style={{ color: "#E9EEF3" }}>
+                    {perimeterWholeFt} ft {perimeterRemainIn} in
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Perimeter (mi)</span>
+                  <span style={{ color: "#E9EEF3" }}>
+                    {perimeterMiles.toFixed(4)}
+                  </span>
+                </div>
+              </div>
+
+              {/* J&K Revenue Scale */}
+              <div
+                className="rounded p-2 space-y-1 mt-2"
+                style={{
+                  background: "rgba(59,130,246,0.08)",
+                  border: "1px solid rgba(59,130,246,0.3)",
+                }}
+              >
+                <p
+                  className="text-xs font-semibold mb-1"
+                  style={{ color: "#60a5fa" }}
+                >
+                  J&amp;K Government Revenue Scale
+                </p>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Kanal</span>
+                  <span style={{ color: "#93c5fd" }}>{kanal.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Marla</span>
+                  <span style={{ color: "#93c5fd" }}>{marla.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Sarsi</span>
+                  <span style={{ color: "#93c5fd" }}>{sarsi.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Area (karam²)</span>
+                  <span style={{ color: "#93c5fd" }}>{sqKaram.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Perim (karam)</span>
+                  <span style={{ color: "#93c5fd" }}>
+                    {perimKaram.toFixed(4)}
+                  </span>
+                </div>
+              </div>
+            </section>
+          )}
+
+          <Separator className="opacity-30" />
+
+          {/* Karam Scale */}
           <section>
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1.5">
-              <Ruler size={12} /> Scale (Karam)
+              <Ruler size={12} /> Karam Scale
             </p>
             <div
-              className="rounded p-2.5 space-y-2"
-              style={{ background: "#1F242A" }}
+              className="rounded p-2 space-y-1.5"
+              style={{ background: "#1F242A", border: "1px solid #3A424C" }}
             >
               <div className="flex items-center gap-2">
                 <Input
@@ -887,419 +1049,179 @@ export function LeftSidebar({
               style={{
                 background: drawMode
                   ? "rgba(34,197,122,0.1)"
-                  : editMode
-                    ? "rgba(245,158,11,0.1)"
-                    : "rgba(255,255,255,0.03)",
+                  : "rgba(255,255,255,0.03)",
                 border: drawMode
-                  ? "1px solid rgba(34,197,122,0.4)"
-                  : editMode
-                    ? "1px solid rgba(245,158,11,0.4)"
-                    : "1px solid #3A424C",
-                color: drawMode ? "#22C57A" : editMode ? "#f59e0b" : "#7E8994",
+                  ? "1px solid rgba(34,197,122,0.3)"
+                  : "1px solid #3A424C",
+                color: drawMode ? "#22C57A" : "#AAB3BD",
               }}
             >
-              <span style={{ fontWeight: 600 }}>
-                {editMode ? (
-                  <Edit3 size={12} />
-                ) : (
-                  DRAW_TOOLS.find((t) => t.tool === drawTool)?.icon
-                )}
-              </span>
-              <span>
-                {editMode
-                  ? "Edit mode — drag points"
-                  : DRAW_TOOLS.find((t) => t.tool === drawTool)?.desc}
-              </span>
+              {DRAW_TOOLS.find((t) => t.tool === drawTool)?.desc}
             </div>
 
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 mb-1.5">
               <Button
                 type="button"
                 size="sm"
-                className="h-8 text-xs gap-1 col-span-2"
+                className="h-8 text-xs gap-1.5 font-semibold"
                 onClick={onToggleDrawMode}
-                disabled={editMode}
                 style={{
                   background: drawMode ? "#22C57A" : "#3A424C",
                   color: drawMode ? "#14181D" : "#E9EEF3",
                   border: "none",
-                  opacity: editMode ? 0.4 : 1,
                 }}
-                data-ocid="tools.toggle"
-              >
-                {DRAW_TOOLS.find((t) => t.tool === drawTool)?.icon}
-                {drawMode
-                  ? "Drawing \u2014 click to stop"
-                  : `Start Drawing (${DRAW_TOOLS.find((t) => t.tool === drawTool)?.label})`}
-              </Button>
-
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 text-xs gap-1 col-span-2"
-                onClick={onToggleEditMode}
-                disabled={points.length === 0}
-                style={{
-                  background: editMode ? "#f59e0b" : "#3A424C",
-                  color: editMode ? "#1a0f00" : "#E9EEF3",
-                  border: editMode
-                    ? "1px solid #d97706"
-                    : "1px solid transparent",
-                  fontWeight: editMode ? 700 : 400,
-                }}
-                data-ocid="tools.edit_button"
+                data-ocid="draw.toggle"
               >
                 <Edit3 size={12} />
-                {editMode ? "Done Editing" : "Edit Points"}
+                {drawMode ? "Drawing…" : "Draw"}
               </Button>
-
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                className="h-8 text-xs gap-1 border-border"
-                onClick={onUndo}
-                disabled={points.length === 0}
+                className="h-8 text-xs gap-1.5 font-semibold"
+                onClick={onToggleEditMode}
                 style={{
-                  background: "#3A424C",
-                  color: "#E9EEF3",
+                  background: editMode ? "#f59e0b" : "#3A424C",
+                  color: editMode ? "#14181D" : "#E9EEF3",
                   border: "none",
                 }}
-                data-ocid="tools.secondary_button"
+                data-ocid="draw.toggle"
               >
-                <Undo2 size={12} /> Undo
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 text-xs gap-1"
-                onClick={onClosePolygon}
-                disabled={points.length < 3}
-                style={{
-                  background: "#3A424C",
-                  color: "#E9EEF3",
-                  border: "none",
-                }}
-                data-ocid="tools.primary_button"
-              >
-                <CheckCheck size={12} /> Close
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 text-xs gap-1 col-span-2"
-                onClick={onClear}
-                disabled={points.length === 0}
-                style={{
-                  background: "rgba(239,68,68,0.15)",
-                  color: "#f87171",
-                  border: "1px solid rgba(239,68,68,0.3)",
-                }}
-                data-ocid="tools.delete_button"
-              >
-                <Trash2 size={12} /> Clear All
+                <Edit3 size={12} />
+                {editMode ? "Editing…" : "Edit Pts"}
               </Button>
             </div>
-          </section>
 
-          <Separator className="opacity-30" />
-
-          {/* Measurement Output */}
-          <section>
-            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-              Measurements
-            </p>
-            {points.length >= 3 ? (
-              <div className="space-y-2">
-                <div
-                  className="rounded p-3 text-center"
-                  style={{
-                    background: "rgba(34,197,122,0.08)",
-                    border: "1px solid rgba(34,197,122,0.3)",
-                  }}
-                >
-                  <div
-                    className="font-bold leading-none"
-                    style={{ fontSize: 28, color: "#22C57A" }}
-                  >
-                    {acres.toFixed(3)}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    acres
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 text-xs">
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div className="font-semibold text-foreground">
-                      {hectares.toFixed(4)}
-                    </div>
-                    <div className="text-muted-foreground">ha</div>
-                  </div>
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div className="font-semibold text-foreground">
-                      {area.toFixed(1)}
-                    </div>
-                    <div className="text-muted-foreground">m\u00b2</div>
-                  </div>
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div className="font-semibold text-foreground">
-                      {sqFeet.toFixed(0)}
-                    </div>
-                    <div className="text-muted-foreground">ft\u00b2</div>
-                  </div>
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div className="font-semibold text-foreground">
-                      {perimeter.toFixed(1)}
-                    </div>
-                    <div className="text-muted-foreground">m perimeter</div>
-                  </div>
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div className="font-semibold text-foreground">
-                      {perimeterFeet.toFixed(1)}
-                    </div>
-                    <div className="text-muted-foreground">ft perimeter</div>
-                  </div>
-                  <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "#1F242A" }}
-                  >
-                    <div
-                      className="font-semibold text-foreground"
-                      style={{ fontSize: 11 }}
-                    >
-                      {perimeterWholeFt} ft {perimeterRemainIn} in
-                    </div>
-                    <div className="text-muted-foreground">perimeter</div>
-                  </div>
-                </div>
-
-                <div
-                  className="rounded p-2 text-xs flex justify-between"
-                  style={{ background: "#1F242A" }}
-                >
-                  <span className="text-muted-foreground">Perimeter</span>
-                  <span className="text-foreground font-medium">
-                    {perimeterMiles.toFixed(3)} mi
-                  </span>
-                </div>
-
-                {karamScale > 0 && (
-                  <div
-                    className="rounded p-2.5 space-y-1.5"
-                    style={{
-                      background: "rgba(34,197,122,0.06)",
-                      border: "1px solid rgba(34,197,122,0.2)",
-                    }}
-                  >
-                    <p
-                      className="text-xs font-semibold"
-                      style={{ color: "#22C57A" }}
-                    >
-                      Karam Scale ({karamScale} ft/karam)
-                    </p>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Area</span>
-                      <span className="text-foreground font-medium">
-                        {sqMetersToSqKaram(area, karamScale).toFixed(2)}{" "}
-                        karam\u00b2
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Perimeter</span>
-                      <span className="text-foreground font-medium">
-                        {metersToKaram(perimeter, karamScale).toFixed(2)} karam
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {points.length >= 3 && (
-                  <div
-                    className="rounded p-2.5 space-y-1.5 mt-2"
-                    style={{
-                      background: "rgba(59,130,246,0.07)",
-                      border: "1px solid rgba(59,130,246,0.25)",
-                    }}
-                  >
-                    <p
-                      className="text-xs font-semibold"
-                      style={{ color: "#60a5fa" }}
-                    >
-                      Jammu &amp; Kashmir Government Revenue Scale
-                    </p>
-                    <div className="grid grid-cols-2 gap-1 text-xs">
-                      <div
-                        className="rounded p-1.5 text-center"
-                        style={{ background: "#1F242A" }}
-                      >
-                        <div className="font-semibold text-foreground">
-                          {sqMetersToKanal(area).toFixed(3)}
-                        </div>
-                        <div className="text-muted-foreground">Kanal</div>
-                      </div>
-                      <div
-                        className="rounded p-1.5 text-center"
-                        style={{ background: "#1F242A" }}
-                      >
-                        <div className="font-semibold text-foreground">
-                          {sqMetersToMarla(area).toFixed(2)}
-                        </div>
-                        <div className="text-muted-foreground">Marla</div>
-                      </div>
-                      <div
-                        className="rounded p-1.5 text-center col-span-2"
-                        style={{ background: "#1F242A" }}
-                      >
-                        <div className="font-semibold text-foreground">
-                          {sqMetersToSarsi(area).toFixed(2)}
-                        </div>
-                        <div className="text-muted-foreground">Sarsi</div>
-                      </div>
-                    </div>
-                    <div
-                      className="text-xs text-muted-foreground mt-1"
-                      style={{ fontSize: 9 }}
-                    >
-                      1 Kanal = 20 Marla \u00b7 1 Marla = 9 Sarsi \u00b7 1 Acre
-                      = 8 Kanal
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div
-                className="rounded p-3 text-center text-xs text-muted-foreground"
-                style={{ background: "#1F242A" }}
-                data-ocid="measurements.empty_state"
+            <div className="grid grid-cols-3 gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={onUndo}
+                disabled={points.length === 0}
+                data-ocid="draw.button"
               >
-                Draw \u2265 3 points to see measurements
-              </div>
-            )}
+                <Undo2 size={11} /> Undo
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={onClosePolygon}
+                disabled={points.length < 3}
+                data-ocid="draw.button"
+              >
+                <CheckCheck size={11} /> Close
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                style={{ background: "#3A424C", color: "#ef4444" }}
+                onClick={onClear}
+                data-ocid="draw.delete_button"
+              >
+                <Trash2 size={11} /> Clear
+              </Button>
+            </div>
           </section>
 
           <Separator className="opacity-30" />
 
           {/* Points List */}
-          <section>
-            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-              Points ({points.length})
-            </p>
-            {points.length === 0 ? (
-              <div
-                className="rounded p-3 text-center text-xs text-muted-foreground"
-                style={{ background: "#1F242A" }}
-                data-ocid="points.empty_state"
-              >
-                No points placed
-              </div>
-            ) : (
-              <div className="space-y-1" data-ocid="points.list">
-                {points.map(([lat, lng], idx) => (
-                  <div
-                    key={`pt-${idx}-${lat.toFixed(4)}-${lng.toFixed(4)}`}
-                    className="flex items-center justify-between rounded px-2 py-1"
-                    style={{
-                      background: "#1F242A",
-                      border: editMode
-                        ? "1px solid rgba(245,158,11,0.25)"
-                        : "1px solid transparent",
-                    }}
-                    data-ocid={`points.item.${idx + 1}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-xs font-bold w-4 text-center"
-                        style={{ color: editMode ? "#f59e0b" : "#22C57A" }}
-                      >
-                        {idx + 1}
-                      </span>
+          {points.length > 0 && (
+            <section>
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">
+                Points ({points.length})
+              </p>
+              <div className="space-y-1">
+                {points.map(
+                  (
+                    pt,
+                    i, // biome-ignore lint/suspicious/noArrayIndexKey: points are ordered by index
+                  ) => (
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: index is stable for ordered points
+                      key={i}
+                      className="flex items-center justify-between rounded px-2 py-1"
+                      style={{ background: "#1F242A" }}
+                      data-ocid={`points.item.${i + 1}`}
+                    >
                       <span
                         className="font-mono text-xs"
-                        style={{ color: "#AAB3BD", fontSize: 10 }}
+                        style={{ color: "#AAB3BD" }}
                       >
-                        {lat.toFixed(5)}, {lng.toFixed(5)}
+                        {i + 1}. {pt[0].toFixed(5)}, {pt[1].toFixed(5)}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => onRemovePoint(i)}
+                        className="text-muted-foreground hover:text-destructive"
+                        data-ocid={`points.delete_button.${i + 1}`}
+                      >
+                        <X size={10} />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => onRemovePoint(idx)}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      data-ocid={`points.delete_button.${idx + 1}`}
-                    >
-                      <X size={11} />
-                    </button>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
-            )}
-          </section>
+            </section>
+          )}
 
           <Separator className="opacity-30" />
 
-          {/* Actions */}
-          <section className="space-y-2">
-            <Button
-              type="button"
-              className="w-full h-9 gap-2 text-sm font-semibold"
-              onClick={onSave}
-              disabled={points.length < 3 || isSaving}
-              style={{
-                background: "#3A424C",
-                color: "#E9EEF3",
-                border: "none",
-              }}
-              data-ocid="project.save_button"
-            >
-              <Save size={14} />
-              {isSaving ? "Saving\u2026" : "Save Project"}
-            </Button>
-
-            <Button
-              type="button"
-              className="w-full h-10 gap-2 text-sm font-bold"
-              onClick={handleExportDXF}
-              disabled={points.length < 3}
-              style={{
-                background:
-                  points.length >= 3 ? "#22C57A" : "rgba(34,197,122,0.3)",
-                color: points.length >= 3 ? "#14181D" : "#AAB3BD",
-                border: "none",
-              }}
-              data-ocid="export.primary_button"
-            >
-              <FileDown size={14} /> EXPORT TO AUTOCAD DXF
-            </Button>
-
-            <Button
-              type="button"
-              className="w-full h-8 gap-2 text-xs"
-              onClick={handleExportCSV}
-              disabled={points.length === 0}
-              style={{
-                background: "#3A424C",
-                color: "#E9EEF3",
-                border: "none",
-              }}
-              data-ocid="export.secondary_button"
-            >
-              <FileText size={12} /> Export CSV Coordinates
-            </Button>
+          {/* Export & Save */}
+          <section>
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">
+              Export &amp; Save
+            </p>
+            <div className="space-y-1.5">
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 w-full text-xs gap-2"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={handleExportDXF}
+                data-ocid="export.button"
+              >
+                <FileDown size={12} /> Export DXF
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 w-full text-xs gap-2"
+                style={{ background: "#3A424C", color: "#E9EEF3" }}
+                onClick={handleExportCSV}
+                data-ocid="export.button"
+              >
+                <FileDown size={12} /> Export CSV
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 w-full text-xs gap-2 font-semibold"
+                style={{
+                  background: "#22C57A",
+                  color: "#14181D",
+                  border: "none",
+                }}
+                onClick={onSave}
+                disabled={isSaving || points.length < 3}
+                data-ocid="project.save_button"
+              >
+                {isSaving ? (
+                  <>
+                    <span className="animate-spin">⟳</span> Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save size={12} /> Save Project
+                  </>
+                )}
+              </Button>
+            </div>
           </section>
         </div>
       </ScrollArea>

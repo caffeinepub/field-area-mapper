@@ -27,6 +27,7 @@ export interface OverlayItem {
   rotation: number;
   blendMode: string;
   scale: number;
+  anchorPoint?: { relLat: number; relLng: number } | null;
 }
 
 export default function App() {
@@ -58,6 +59,7 @@ export default function App() {
   const [mapBounds, setMapBounds] = useState<
     [[number, number], [number, number]] | null
   >(null);
+  const [anchorPickModeId, setAnchorPickModeId] = useState<string | null>(null);
 
   const area = calculateArea(points);
   const perimeter = calculatePerimeter(points);
@@ -205,7 +207,12 @@ export default function App() {
     updates: Partial<
       Pick<
         OverlayItem,
-        "bounds" | "opacity" | "rotation" | "blendMode" | "scale"
+        | "bounds"
+        | "opacity"
+        | "rotation"
+        | "blendMode"
+        | "scale"
+        | "anchorPoint"
       >
     >,
   ) {
@@ -232,6 +239,17 @@ export default function App() {
 
   function handleRemoveOverlay(id: string) {
     setOverlays((prev) => prev.filter((o) => o.id !== id));
+  }
+
+  function handleSetAnchorPickMode(id: string | null) {
+    setAnchorPickModeId(id);
+  }
+
+  function handleSetOverlayAnchor(
+    id: string,
+    anchor: { relLat: number; relLng: number },
+  ) {
+    handleUpdateOverlay(id, { anchorPoint: anchor });
   }
 
   // Get current map center for overlay initial bounds
@@ -407,6 +425,7 @@ export default function App() {
           karamScale={karamScale}
           drawTool={drawTool}
           overlays={overlays}
+          anchorPickModeId={anchorPickModeId}
           onKaramScaleChange={setKaramScale}
           onTileModeChange={setTileMode}
           onToggleDrawMode={() => setDrawMode((d) => !d)}
@@ -432,6 +451,7 @@ export default function App() {
           mapBounds={mapBounds}
           onUpdateOverlay={handleUpdateOverlay}
           onRemoveOverlay={handleRemoveOverlay}
+          onAnchorPickMode={handleSetAnchorPickMode}
         />
 
         <div className="flex-1 relative overflow-hidden">
@@ -446,12 +466,15 @@ export default function App() {
             drawTool={drawTool}
             searchTarget={searchTarget}
             overlays={overlays}
+            anchorPickModeId={anchorPickModeId}
             onAddPoint={handleAddPoint}
             onSetPoints={handleSetPoints}
             onOverlayUpdate={(id, bounds, rotation, opacity) =>
               handleUpdateOverlay(id, { bounds, rotation, opacity })
             }
             onBoundsChange={setMapBounds}
+            onSetAnchorPickMode={handleSetAnchorPickMode}
+            onSetOverlayAnchor={handleSetOverlayAnchor}
           />
 
           {editMode && (
@@ -487,6 +510,21 @@ export default function App() {
                   : drawTool === "circle"
                     ? "Click center then edge to draw a circle"
                     : `Click on the map to place ${drawTool} vertices`}
+            </div>
+          )}
+
+          {anchorPickModeId && (
+            <div
+              className="absolute top-3 left-1/2 -translate-x-1/2 text-xs font-semibold px-3 py-1.5 rounded-full pointer-events-none"
+              style={{
+                background: "rgba(6,182,212,0.15)",
+                border: "1px solid rgba(6,182,212,0.5)",
+                color: "#06b6d4",
+                backdropFilter: "blur(4px)",
+                zIndex: 1000,
+              }}
+            >
+              Click on the overlay to set drag anchor point
             </div>
           )}
         </div>
